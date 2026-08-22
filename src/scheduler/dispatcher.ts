@@ -15,8 +15,10 @@ export class FairDispatcher {
     async getPendingCounts(): Promise<Map<string, number>> {
         const pendingCounts = new Map<string, number>();
 
-        for (const tenantId of getKnownTenants()) {
-            const queue = getTenantQueue(tenantId);
+        const tenants = await getKnownTenants();
+
+        for (const tenantId of tenants) {
+            const queue = await getTenantQueue(tenantId);
 
             const counts = await queue.getJobCounts(
                 "waiting"
@@ -36,7 +38,8 @@ export class FairDispatcher {
     }
 
     async pickNextJob(): Promise<Job | null> {
-        const pendingCounts = await this.getPendingCounts();
+        const pendingCounts =
+            await this.getPendingCounts();
 
         console.log(
             "[FairDispatcher] Pending:",
@@ -44,13 +47,16 @@ export class FairDispatcher {
         );
 
         const tenantId =
-            this.scheduler.pickNextTenant(pendingCounts);
+            this.scheduler.pickNextTenant(
+                pendingCounts
+            );
 
         if (!tenantId) {
             return null;
         }
 
-        const queue = getTenantQueue(tenantId);
+        const queue =
+            await getTenantQueue(tenantId);
 
         const jobs = await queue.getJobs(
             ["waiting"],
@@ -73,8 +79,6 @@ export class FairDispatcher {
 
     async completeJob(job: Job): Promise<void> {
         const tenantId = job.data.tenantId;
-
-        const queue = getTenantQueue(tenantId);
 
         await job.remove();
 

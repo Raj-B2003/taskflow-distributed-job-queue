@@ -1,13 +1,13 @@
 import { FairDispatcher } from "./dispatcher.js";
 import { getTenantQueue } from "./tenantQueues.js";
 async function clearQueue(tenantId) {
-    const queue = getTenantQueue(tenantId);
+    const queue = await getTenantQueue(tenantId);
     await queue.obliterate({
         force: true,
     });
 }
 async function addJob(tenantId, type, data) {
-    const queue = getTenantQueue(tenantId);
+    const queue = await getTenantQueue(tenantId);
     await queue.add(type, {
         tenantId,
         type,
@@ -18,18 +18,28 @@ async function main() {
     const tenantA = "fair-run-a";
     const tenantB = "fair-run-b";
     const tenantC = "fair-run-c";
-    // Start with clean queues for this test.
+    // Start with clean queues.
     await clearQueue(tenantA);
     await clearQueue(tenantB);
     await clearQueue(tenantC);
     // Tenant A has 3 jobs.
-    await addJob(tenantA, "email", { to: "a1@example.com" });
-    await addJob(tenantA, "email", { to: "a2@example.com" });
-    await addJob(tenantA, "email", { to: "a3@example.com" });
+    await addJob(tenantA, "email", {
+        to: "a1@example.com",
+    });
+    await addJob(tenantA, "email", {
+        to: "a2@example.com",
+    });
+    await addJob(tenantA, "email", {
+        to: "a3@example.com",
+    });
     // Tenant B has 1 job.
-    await addJob(tenantB, "report", { name: "monthly-report" });
+    await addJob(tenantB, "report", {
+        name: "monthly-report",
+    });
     // Tenant C has 1 job.
-    await addJob(tenantC, "image", { filename: "photo.jpg" });
+    await addJob(tenantC, "image", {
+        filename: "photo.jpg",
+    });
     const dispatcher = new FairDispatcher();
     console.log("\n=== Initial queue state ===\n");
     console.log(await dispatcher.getPendingCounts());

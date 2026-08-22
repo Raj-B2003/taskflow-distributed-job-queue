@@ -7,8 +7,9 @@ export class FairDispatcher {
     }
     async getPendingCounts() {
         const pendingCounts = new Map();
-        for (const tenantId of getKnownTenants()) {
-            const queue = getTenantQueue(tenantId);
+        const tenants = await getKnownTenants();
+        for (const tenantId of tenants) {
+            const queue = await getTenantQueue(tenantId);
             const counts = await queue.getJobCounts("waiting");
             console.log(`[FairDispatcher] ${tenantId} waiting=${counts.waiting}`);
             pendingCounts.set(tenantId, counts.waiting);
@@ -22,7 +23,7 @@ export class FairDispatcher {
         if (!tenantId) {
             return null;
         }
-        const queue = getTenantQueue(tenantId);
+        const queue = await getTenantQueue(tenantId);
         const jobs = await queue.getJobs(["waiting"], 0, 0);
         if (jobs.length === 0) {
             return null;
@@ -33,7 +34,6 @@ export class FairDispatcher {
     }
     async completeJob(job) {
         const tenantId = job.data.tenantId;
-        const queue = getTenantQueue(tenantId);
         await job.remove();
         this.scheduler.onJobProcessed(tenantId);
         console.log(`[FairDispatcher] Completed job ${job.id} | tenant=${tenantId}`);
