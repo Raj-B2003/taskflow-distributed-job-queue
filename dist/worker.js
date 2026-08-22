@@ -1,7 +1,5 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-const bullmq_1 = require("bullmq");
-const queue_js_1 = require("./queue.js");
+import { Worker } from "bullmq";
+import { deadLetterQueue, redisConnection } from "./queue.js";
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -45,8 +43,8 @@ async function processJob(job) {
         processedAt: new Date().toISOString(),
     };
 }
-const worker = new bullmq_1.Worker("taskflow", processJob, {
-    connection: queue_js_1.redisConnection,
+const worker = new Worker("taskflow", processJob, {
+    connection: redisConnection,
     concurrency: 3,
 });
 worker.on("completed", job => {
@@ -61,7 +59,7 @@ worker.on("failed", async (job, error) => {
     const maxAttempts = job.opts.attempts ?? 1;
     if (errorType === "permanent" ||
         job.attemptsMade >= maxAttempts) {
-        await queue_js_1.deadLetterQueue.add("dead-letter", {
+        await deadLetterQueue.add("dead-letter", {
             originalJobId: job.id,
             originalJobName: job.name,
             originalData: job.data,

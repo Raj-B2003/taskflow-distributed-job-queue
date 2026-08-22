@@ -6,7 +6,7 @@ export const redisConnection = {
     port: 6379,
 };
 
-export const redis = new Redis(redisConnection);
+export const redis = new (Redis as any)(redisConnection);
 
 export const taskQueue = new Queue("taskflow", {
     connection: redisConnection,
@@ -19,6 +19,9 @@ export const taskQueue = new Queue("taskflow", {
     },
 });
 
-export const deadLetterQueue = new Queue("taskflow-dead-letter", {
-    connection: redisConnection,
-});
+export const deadLetterQueue = new Queue(
+    "taskflow-dead-letter",
+    {
+        connection: redisConnection,
+    }
+);

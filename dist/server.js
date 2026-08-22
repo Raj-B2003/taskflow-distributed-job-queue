@@ -1,12 +1,7 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const express_1 = __importDefault(require("express"));
-const queue_js_1 = require("./queue.js");
-const app = (0, express_1.default)();
-app.use(express_1.default.json());
+import express from "express";
+import { redis, taskQueue, deadLetterQueue } from "./queue.js";
+const app = express();
+app.use(express.json());
 app.get("/", (_req, res) => {
     res.json({
         name: "TaskFlow",
@@ -29,9 +24,9 @@ app.post("/jobs", async (req, res) => {
         const redisKey = `idem:${idempotencyKey}`;
         // Reserve the idempotency key atomically.
         // NX means the key is created only when it does not already exist.
-        const lockAcquired = await queue_js_1.redis.set(redisKey, "creating", "EX", 86400, "NX");
+        const lockAcquired = await redis.set(redisKey, "creating", "EX", 86400, "NX");
         if (!lockAcquired) {
-            const existingJobId = await queue_js_1.redis.get(redisKey);
+            const existingJobId = await redis.get(redisKey);
             if (existingJobId && existingJobId !== "creating") {
                 return res.status(200).json({
                     message: "Job already exists",
@@ -45,12 +40,12 @@ app.post("/jobs", async (req, res) => {
             });
         }
         try {
-            const job = await queue_js_1.taskQueue.add(type, {
+            const job = await taskQueue.add(type, {
                 type,
                 idempotencyKey,
                 ...data,
             });
-            await queue_js_1.redis.set(redisKey, String(job.id), "EX", 86400);
+            await redis.set(redisKey, String(job.id), "EX", 86400);
             return res.status(201).json({
                 message: "Job added",
                 jobId: job.id,
@@ -60,7 +55,7 @@ app.post("/jobs", async (req, res) => {
         }
         catch (error) {
             // Release the reservation if job creation failed.
-            await queue_js_1.redis.del(redisKey);
+            await redis.del(redisKey);
             throw error;
         }
     }
@@ -73,7 +68,7 @@ app.post("/jobs", async (req, res) => {
 });
 app.get("/jobs/:id", async (req, res) => {
     try {
-        const job = await queue_js_1.taskQueue.getJob(req.params.id);
+        const job = await taskQueue.getJob(req.params.id);
         if (!job) {
             return res.status(404).json({
                 error: "Job not found",
@@ -99,7 +94,7 @@ app.get("/jobs/:id", async (req, res) => {
 });
 app.get("/metrics", async (_req, res) => {
     try {
-        const counts = await queue_js_1.taskQueue.getJobCounts("waiting", "active", "completed", "failed", "delayed");
+        const counts = await taskQueue.getJobCounts("waiting", "active", "completed", "failed", "delayed");
         return res.json({
             queue: "taskflow",
             ...counts,
@@ -114,7 +109,7 @@ app.get("/metrics", async (_req, res) => {
 });
 app.get("/dead-letters", async (_req, res) => {
     try {
-        const jobs = await queue_js_1.deadLetterQueue.getJobs(["waiting", "active", "completed", "failed"], 0, 49);
+        const jobs = await deadLetterQueue.getJobs(["waiting", "active", "completed", "failed"], 0, 49);
         const deadLetters = jobs.map(job => ({
             id: job.id,
             data: job.data,
