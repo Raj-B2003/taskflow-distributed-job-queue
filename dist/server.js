@@ -27,8 +27,8 @@ app.post("/jobs", async (req, res) => {
             });
         }
         const redisKey = `idem:${idempotencyKey}`;
-        // Reserve this idempotency key atomically.
-        // NX means Redis only creates the key if it does not already exist.
+        // Reserve the idempotency key atomically.
+        // NX means the key is created only when it does not already exist.
         const lockAcquired = await queue_js_1.redis.set(redisKey, "creating", "EX", 86400, "NX");
         if (!lockAcquired) {
             const existingJobId = await queue_js_1.redis.get(redisKey);
@@ -109,6 +109,27 @@ app.get("/metrics", async (_req, res) => {
         console.error("Failed to fetch metrics:", error);
         return res.status(500).json({
             error: "Failed to fetch metrics",
+        });
+    }
+});
+app.get("/dead-letters", async (_req, res) => {
+    try {
+        const jobs = await queue_js_1.deadLetterQueue.getJobs(["waiting", "active", "completed", "failed"], 0, 49);
+        const deadLetters = jobs.map(job => ({
+            id: job.id,
+            data: job.data,
+            state: "dead-letter",
+        }));
+        return res.json({
+            queue: "taskflow-dead-letter",
+            count: deadLetters.length,
+            jobs: deadLetters,
+        });
+    }
+    catch (error) {
+        console.error("Failed to fetch dead-letter jobs:", error);
+        return res.status(500).json({
+            error: "Failed to fetch dead-letter jobs",
         });
     }
 });

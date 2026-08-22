@@ -1,5 +1,5 @@
 import express from "express";
-import { redis, taskQueue } from "./queue.js";
+import { redis, taskQueue, deadLetterQueue } from "./queue.js";
 
 const app = express();
 
@@ -30,8 +30,8 @@ app.post("/jobs", async (req, res) => {
 
         const redisKey = `idem:${idempotencyKey}`;
 
-        // Reserve this idempotency key atomically.
-        // NX means Redis only creates the key if it does not already exist.
+        // Reserve the idempotency key atomically.
+        // NX means the key is created only when it does not already exist.
         const lockAcquired = await redis.set(
             redisKey,
             "creating",
@@ -140,6 +140,34 @@ app.get("/metrics", async (_req, res) => {
 
         return res.status(500).json({
             error: "Failed to fetch metrics",
+        });
+    }
+});
+
+app.get("/dead-letters", async (_req, res) => {
+    try {
+        const jobs = await deadLetterQueue.getJobs(
+            ["waiting", "active", "completed", "failed"],
+            0,
+            49
+        );
+
+        const deadLetters = jobs.map(job => ({
+            id: job.id,
+            data: job.data,
+            state: "dead-letter",
+        }));
+
+        return res.json({
+            queue: "taskflow-dead-letter",
+            count: deadLetters.length,
+            jobs: deadLetters,
+        });
+    } catch (error) {
+        console.error("Failed to fetch dead-letter jobs:", error);
+
+        return res.status(500).json({
+            error: "Failed to fetch dead-letter jobs",
         });
     }
 });

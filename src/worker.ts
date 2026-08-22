@@ -1,28 +1,62 @@
-import { Worker } from "bullmq";
-import { redisConnection } from "./queue.js";
+import { Worker, Job } from "bullmq";
+import { deadLetterQueue, redisConnection } from "./queue.js";
 
 function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function processJob(job: any) {
+function classifyError(error: Error): "transient" | "permanent" {
+    const message = error.message.toLowerCase();
+
+    if (
+        message.includes("timeout") ||
+        message.includes("temporarily") ||
+        message.includes("connection")
+    ) {
+        return "transient";
+    }
+
+    return "permanent";
+}
+
+async function processJob(job: Job) {
     console.log(
-        `[Worker] Processing job ${job.id} | type=${job.data.type}`
+        `[Worker] Processing job ${job.id} | type=${job.data.type} | attempt=${job.attemptsMade + 1}`
     );
 
-    await sleep(1500);
+    await sleep(1000);
+
+    // Simulate a temporary failure.
+    // The first two attempts fail, then the job is allowed to continue.
+    if (
+        job.data.shouldFail === "transient" &&
+        job.attemptsMade < 2
+    ) {
+        throw new Error("Temporary service timeout");
+    }
+
+    // Simulate a permanent failure.
+    if (job.data.shouldFail === "permanent") {
+        throw new Error("Invalid job payload");
+    }
 
     switch (job.data.type) {
         case "email":
-            console.log(`[Worker] Sending email to ${job.data.to}`);
+            console.log(
+                `[Worker] Sending email to ${job.data.to}`
+            );
             break;
 
         case "report":
-            console.log(`[Worker] Generating report: ${job.data.name}`);
+            console.log(
+                `[Worker] Generating report: ${job.data.name}`
+            );
             break;
 
         case "image":
-            console.log(`[Worker] Processing image: ${job.data.filename}`);
+            console.log(
+                `[Worker] Processing image: ${job.data.filename}`
+            );
             break;
 
         default:
@@ -48,14 +82,45 @@ worker.on("completed", job => {
     console.log(`[Worker] Job ${job.id} completed`);
 });
 
-worker.on("failed", (job, error) => {
+worker.on("failed", async (job, error) => {
+    if (!job) {
+        return;
+    }
+
+    const errorType = classifyError(error);
+
     console.log(
-        `[Worker] Job ${job?.id} failed: ${error.message}`
+        `[Worker] Job ${job.id} failed | type=${errorType} | attempt=${job.attemptsMade}`
     );
+
+    const maxAttempts = job.opts.attempts ?? 1;
+
+    if (
+        errorType === "permanent" ||
+        job.attemptsMade >= maxAttempts
+    ) {
+        await deadLetterQueue.add(
+            "dead-letter",
+            {
+                originalJobId: job.id,
+                originalJobName: job.name,
+                originalData: job.data,
+                error: error.message,
+                failedAt: new Date().toISOString(),
+                attempts: job.attemptsMade,
+            }
+        );
+
+        console.log(
+            `[Worker] Job ${job.id} moved to dead-letter queue`
+        );
+    }
 });
 
 worker.on("error", error => {
-    console.error(`[Worker] Error: ${error.message}`);
+    console.error(
+        `[Worker] Worker error: ${error.message}`
+    );
 });
 
 console.log("TaskFlow worker is running...");

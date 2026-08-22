@@ -5,9 +5,28 @@ const queue_js_1 = require("./queue.js");
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
+function classifyError(error) {
+    const message = error.message.toLowerCase();
+    if (message.includes("timeout") ||
+        message.includes("temporarily") ||
+        message.includes("connection")) {
+        return "transient";
+    }
+    return "permanent";
+}
 async function processJob(job) {
-    console.log(`[Worker] Processing job ${job.id} | type=${job.data.type}`);
-    await sleep(1500);
+    console.log(`[Worker] Processing job ${job.id} | type=${job.data.type} | attempt=${job.attemptsMade + 1}`);
+    await sleep(1000);
+    // Simulate a temporary failure.
+    // The first two attempts fail, then the job is allowed to continue.
+    if (job.data.shouldFail === "transient" &&
+        job.attemptsMade < 2) {
+        throw new Error("Temporary service timeout");
+    }
+    // Simulate a permanent failure.
+    if (job.data.shouldFail === "permanent") {
+        throw new Error("Invalid job payload");
+    }
     switch (job.data.type) {
         case "email":
             console.log(`[Worker] Sending email to ${job.data.to}`);
@@ -33,11 +52,28 @@ const worker = new bullmq_1.Worker("taskflow", processJob, {
 worker.on("completed", job => {
     console.log(`[Worker] Job ${job.id} completed`);
 });
-worker.on("failed", (job, error) => {
-    console.log(`[Worker] Job ${job?.id} failed: ${error.message}`);
+worker.on("failed", async (job, error) => {
+    if (!job) {
+        return;
+    }
+    const errorType = classifyError(error);
+    console.log(`[Worker] Job ${job.id} failed | type=${errorType} | attempt=${job.attemptsMade}`);
+    const maxAttempts = job.opts.attempts ?? 1;
+    if (errorType === "permanent" ||
+        job.attemptsMade >= maxAttempts) {
+        await queue_js_1.deadLetterQueue.add("dead-letter", {
+            originalJobId: job.id,
+            originalJobName: job.name,
+            originalData: job.data,
+            error: error.message,
+            failedAt: new Date().toISOString(),
+            attempts: job.attemptsMade,
+        });
+        console.log(`[Worker] Job ${job.id} moved to dead-letter queue`);
+    }
 });
 worker.on("error", error => {
-    console.error(`[Worker] Error: ${error.message}`);
+    console.error(`[Worker] Worker error: ${error.message}`);
 });
 console.log("TaskFlow worker is running...");
 //# sourceMappingURL=worker.js.map

@@ -10,4 +10,15 @@ export const redis = new Redis(redisConnection);
 
 export const taskQueue = new Queue("taskflow", {
     connection: redisConnection,
+    defaultJobOptions: {
+        attempts: 3,
+        backoff: {
+            type: "exponential",
+            delay: 1000,
+        },
+    },
+});
+
+export const deadLetterQueue = new Queue("taskflow-dead-letter", {
+    connection: redisConnection,
 });
