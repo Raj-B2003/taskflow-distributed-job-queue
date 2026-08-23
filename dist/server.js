@@ -1,8 +1,12 @@
 import express from "express";
 import { redis, taskQueue, deadLetterQueue, } from "./queue.js";
 import { getTenantQueue } from "./scheduler/tenantQueues.js";
+import { createJob as createDatabaseJob, } from "./db/jobRepository.js";
 const app = express();
 app.use(express.json());
+// ============================================================
+// Health check
+// ============================================================
 app.get("/", (_req, res) => {
     res.json({
         name: "TaskFlow",
@@ -44,11 +48,24 @@ app.post("/jobs", async (req, res) => {
             });
         }
         try {
+            // Create the BullMQ job first.
             const job = await taskQueue.add(type, {
                 type,
                 idempotencyKey,
                 ...data,
             });
+            // Store durable metadata in PostgreSQL.
+            await createDatabaseJob({
+                queueJobId: String(job.id),
+                jobType: type,
+                payload: {
+                    type,
+                    idempotencyKey,
+                    ...data,
+                },
+            });
+            // Replace the temporary Redis reservation
+            // with the actual BullMQ job ID.
             await redis.set(redisKey, String(job.id), "EX", 86400);
             return res.status(201).json({
                 message: "Job added",
@@ -58,6 +75,8 @@ app.post("/jobs", async (req, res) => {
             });
         }
         catch (error) {
+            // If anything failed after reserving the
+            // idempotency key, release the reservation.
             await redis.del(redisKey);
             throw error;
         }
@@ -85,11 +104,24 @@ app.post("/tenant-jobs", async (req, res) => {
                 error: "Job type is required",
             });
         }
+        // Get/create the tenant-specific queue.
         const tenantQueue = await getTenantQueue(tenantId);
+        // Add the job to BullMQ.
         const job = await tenantQueue.add(type, {
             tenantId,
             type,
             ...data,
+        });
+        // Persist job metadata in PostgreSQL.
+        await createDatabaseJob({
+            queueJobId: String(job.id),
+            tenantId,
+            jobType: type,
+            payload: {
+                tenantId,
+                type,
+                ...data,
+            },
         });
         return res.status(201).json({
             message: "Tenant job added",
@@ -106,7 +138,7 @@ app.post("/tenant-jobs", async (req, res) => {
     }
 });
 // ============================================================
-// Job status
+// Normal job status
 // ============================================================
 app.get("/jobs/:id", async (req, res) => {
     try {
@@ -182,7 +214,7 @@ app.get("/dead-letters", async (_req, res) => {
     }
 });
 // ============================================================
-// Start server
+// Start API
 // ============================================================
 const PORT = 3000;
 app.listen(PORT, () => {

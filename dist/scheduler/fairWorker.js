@@ -1,5 +1,7 @@
 import { FairDispatcher } from "./dispatcher.js";
+import { markProcessing, markCompleted, markDeadLetter, } from "../db/jobRepository.js";
 import { deadLetterQueue } from "../queue.js";
+import { getTenantQueue } from "./tenantQueues.js";
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -13,14 +15,15 @@ function classifyError(error) {
     return "permanent";
 }
 async function processJob(job) {
-    console.log(`[FairWorker] Processing job ${job.id} | tenant=${job.data.tenantId} | type=${job.name} | attempt=${job.attemptsMade + 1}`);
+    console.log(`[FairWorker] Processing job ${job.id} | tenant=${job.data.tenantId} | type=${job.name} | attempt=${job.data.attemptNumber ?? 1}`);
+    await markProcessing(String(job.data.originalJobId ?? job.id), Number(job.data.attemptNumber ?? 1));
     await sleep(1000);
-    // Test mode: transient failures recover after two attempts.
+    // Simulate a transient error for the first two attempts.
     if (job.data.shouldFail === "transient" &&
-        job.attemptsMade < 2) {
+        Number(job.data.attemptNumber ?? 1) < 3) {
         throw new Error("Temporary service timeout");
     }
-    // Test mode: permanent failures never recover.
+    // Simulate a permanent error.
     if (job.data.shouldFail === "permanent") {
         throw new Error("Invalid job payload");
     }
@@ -37,17 +40,36 @@ async function processJob(job) {
         default:
             console.log("[FairWorker] Processing generic job");
     }
+    return {
+        success: true,
+        processedAt: new Date().toISOString(),
+    };
+}
+async function createRetryJob(job) {
+    const tenantId = String(job.data.tenantId);
+    const currentAttempt = Number(job.data.attemptNumber ?? 1);
+    const nextAttempt = currentAttempt + 1;
+    const tenantQueue = await getTenantQueue(tenantId);
+    const retryJob = await tenantQueue.add(job.name, {
+        ...job.data,
+        originalJobId: job.data.originalJobId ?? job.id,
+        attemptNumber: nextAttempt,
+    });
+    console.log(`[FairWorker] Created retry job ${retryJob.id} for original job ${job.data.originalJobId ?? job.id} | attempt=${nextAttempt}`);
 }
 async function moveToDeadLetter(job, error) {
+    const originalJobId = String(job.data.originalJobId ?? job.id);
+    const attemptNumber = Number(job.data.attemptNumber ?? 1);
     await deadLetterQueue.add("dead-letter", {
-        originalJobId: job.id,
+        originalJobId,
         originalJobName: job.name,
         originalData: job.data,
         error: error.message,
         failedAt: new Date().toISOString(),
-        attempts: job.attemptsMade,
+        attempts: attemptNumber,
     });
-    console.log(`[FairWorker] Job ${job.id} moved to dead-letter queue`);
+    await markDeadLetter(originalJobId, error.message);
+    console.log(`[FairWorker] Job ${originalJobId} moved to dead-letter queue`);
 }
 async function runWorker() {
     const dispatcher = new FairDispatcher();
@@ -60,7 +82,10 @@ async function runWorker() {
                 continue;
             }
             try {
-                await processJob(job);
+                const result = await processJob(job);
+                const originalJobId = String(job.data.originalJobId ??
+                    job.id);
+                await markCompleted(originalJobId, result);
                 await dispatcher.completeJob(job);
             }
             catch (error) {
@@ -68,19 +93,14 @@ async function runWorker() {
                     ? error
                     : new Error(String(error));
                 const errorType = classifyError(jobError);
-                console.log(`[FairWorker] Job ${job.id} failed | type=${errorType} | attempt=${job.attemptsMade + 1}`);
-                // Transient failures get another chance.
-                // We keep the job in the queue instead of
-                // completing it.
-                if (errorType === "transient") {
-                    if (job.attemptsMade < 2) {
-                        console.log(`[FairWorker] Retrying job ${job.id}`);
-                        await sleep(1000);
-                        continue;
-                    }
+                const attemptNumber = Number(job.data.attemptNumber ?? 1);
+                console.log(`[FairWorker] Job ${job.id} failed | type=${errorType} | attempt=${attemptNumber}`);
+                if (errorType === "transient" &&
+                    attemptNumber < 3) {
+                    await createRetryJob(job);
+                    await dispatcher.completeJob(job);
+                    continue;
                 }
-                // Permanent errors, or exhausted transient retries,
-                // are sent to the dead-letter queue.
                 await moveToDeadLetter(job, jobError);
                 await dispatcher.completeJob(job);
             }
