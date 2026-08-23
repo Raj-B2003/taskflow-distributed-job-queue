@@ -1,0 +1,66 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: taskflow-redis
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: taskflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: taskflow_user
+      POSTGRES_PASSWORD: taskflow_dev
+      POSTGRES_DB: taskflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  api:
+    build: .
+    container_name: taskflow-api
+    restart: unless-stopped
+    command: node dist/server.js
+    ports:
+      - "3000:3000"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: taskflow
+      DB_USER: taskflow_user
+      DB_PASSWORD: taskflow_dev
+    depends_on:
+      - redis
+      - postgres
+
+  worker:
+    build: .
+    container_name: taskflow-worker
+    restart: unless-stopped
+    command: node dist/worker.js
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      - redis
+
+  fair-worker:
+    build: .
+    container_name: taskflow-fair-worker
+    restart: unless-stopped
+    command: node dist/scheduler/fairWorker.js
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: taskflow
+      DB_USER: taskflow_user
+      DB_PASSWORD: taskflow_dev
+    depends_on:
+      - redis
+      - postgres
+
+volumes:
+  postgres_data:
